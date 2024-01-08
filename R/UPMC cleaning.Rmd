@@ -1,0 +1,231 @@
+---
+title: "UPMC Sepsis cleaning"
+output: html_document
+date: "2024-01-05"
+---
+
+```{r setup, include=FALSE}
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(skimr)
+library(VIM)
+library(mice)
+library(ggplot2)
+
+upmc <- fread("C:/Users/vadim/OneDrive/Desktop/UPMC/UPMC Emergency cohort pre-imputation carryforward V1.csv", 
+                 colClasses = c(gender = "factor", icu = "factor", mechvent = "factor", race = "factor", dead = "factor",
+                                surg = "factor",  pbc = "factor", pos_pbc = "factor", cx_type = "factor", 
+                                cx_source = "factor", admit_year = "factor", stringsAsFactors = TRUE))
+
+upmc2 <- fread("C:/Users/vadim/OneDrive/Desktop/UPMC/UPMC Emergency cohort original V1.csv", 
+               colClasses = c(gender = "factor", icu = "factor", mechvent = "factor", race = "factor", dead = "factor",
+                              surg = "factor",  pbc = "factor", pos_pbc = "factor", cx_type = "factor", 
+                              cx_source = "factor", admit_year = "factor"))
+
+upmc2 <- subset(upmc2, select = -c(sofa_total, sirs_total, age, alb, alt, ast, base_excess, bicarb, bili, bun, cl, creat, dbp,
+                                   elix, fio2, gcs, gender, gluc, hr, hgb, icu, inr, lactate, map, mechvent, paco2, pao2, 
+                                   pf_ratio, ph, plt, k, rr, shock_index, na, o2_sat, sbp, temp, wbc, weight, fluid, 
+                                   norepi_equiv, dtt0_hours, dead_90, action, interval, empi_id))
+
+heights <- fread("C:/Users/vadim/OneDrive/Desktop/UPMC/UPMC Heights.csv")
+
+```
+
+## Join datasets
+merge by hosp_id and row number (id)
+
+Saved as:
+write.csv(cupmc, "C:/Users/vadim/OneDrive/Desktop/UPMC/UPMC Combined long data.csv")
+
+```{r merge}
+
+upmc <- group_by(upmc, hosp_id) |> mutate(id = row_number())
+upmc2 <- group_by(upmc2, hosp_id) |> mutate(id = row_number())
+
+mupmc <- full_join(upmc, upmc2, by = c("hosp_id", "id"))
+
+heights <- group_by(heights, hosp_id) |> mutate(id = row_number())
+
+cupmc <- right_join(heights, mupmc, by = c("hosp_id", "id"))
+
+setorder(cupmc, hosp_id, id)
+
+```
+
+
+## OPTIONAL:  Limiting dataset to sepsis-associated hypotension or shock
+length(unique(fupmc$hosp_id))
+N = 43462
+
+table(fupmc$id)
+ 1     2     3     4     5     6     7     8     9    10    11    12    13 
+ 43462 43462 43078 42872 42603 42254 41776 41309 40951 40627 40082 39260 13601
+
+```{r Hypotension or Shock}
+fupmc <- cupmc |>
+  group_by(hosp_id) |>                
+  filter(any(sbp < 101 | map < 66 | norepi_equiv > 0)) |>  
+  ungroup()   
+
+```
+
+## Making a new time variable for t=0 == 1st time someone is recorded as being HoTN or in shock
+May or may not use in analysis
+
+saved as: 
+write.csv(fupmc, "C:/Users/vadim/OneDrive/Desktop/UPMC/UPMC combined_pre imputed.csv")
+
+```{r}
+
+create_time_column <- function(fupmc) {
+  fupmc |>
+    group_by(hosp_id) |>
+    mutate(first_row = which.min(ifelse(sbp < 101 | map < 66 | norepi_equiv > 0, interval, Inf))) |>
+    mutate(time = row_number() - first_row) |>
+    ungroup() 
+}
+
+fupmc <- create_time_column(fupmc)
+
+fupmc |> relocate(time)
+```
+
+## Carryforward heights
+when not missing
+
+sum(is.na(cupmc$height))
+= 22959
+
+can also carry forward with library(zoo)
+tmleupmc$hospitallocf <- zoo::na.locf(tmleupmc$hospital)
+sum(is.na(tmleupmc$hospitallocf))
+
+```{r carryforward heights}
+
+cupmc <- cupmc |> 
+  group_by(hosp_id) |>
+  fill(height, .direction = "down") |>
+  ungroup()
+
+```
+
+## Hot deck imputation
+Not enough compute for other imputations
+
+
+#Here's code for KNN:
+knn_fupmc <- fupmc[, !(names(fupmc) %in% c("fluid_cckg_ibw", "adjbw", 
+                                          "ibw", "fluid_cckg", "egfr", "pulsepress", "pf_ratio", "shock_index"))]
+
+numeric_fupmc <- fupmc[sapply(fupmc, is.numeric)]
+nonnumeric_fupmc <- fupmc[sapply(fupmc, Negate(is.numeric))]
+
+knn_normupmc <- as.data.frame(lapply(numeric_fupmc, scale))
+
+knn_fupmc <- fupmc[, !(names(fupmc) %in% c("pf_ratio", "shock_index", "enc_start_dt", "enc_end_dt", "dt_t0_first",  "death_date",
+                                          "icu_start_dt", "icu_end_dt", "hospital", "empi_id"))]
+
+knn_fupmc <- knn_normupmc[, !(names(knn_normupmc) %in% c("pf_ratio", "shock_index"))]
+
+knn_upmc5 <- kNN(knn_fupmc, k = 5)
+
+#And code for MICE (which I can't get to converge):
+imp_mice <- mice(fupmc[, c("height", "weight", "alb", "alt", "ast", "base_excess", "elix",        
+                   "bicarb", "bili", "bun", "cl", "creat", "dbp", "fio2", "gcs", 
+                   "gluc", "hr", "hgb", "inr", "lactate", "map", "paco2", "pao2",                 
+                   "pf_ratio", "ph", "plt", "k", "rr", "na", "o2_sat","sbp", "temp",                 
+                   "wbc")], 
+            method = 'pmm', 
+            m = 5, 
+            maxit = 15,
+            seed = 1,
+            printFlag = TRUE)
+
+compl_fupmc <- complete(imp_mice, action = "long", include = TRUE)
+
+summary(compl_fupmc)
+
+summary(fupmc)
+
+head(compl_upmc[compl_upmc$.imp_mice == 2, ], )
+
+--diagnosing imputation problems: densityplot(imp_mice), stripplot(imp_mice)
+sapply(fupmc, function(i) sum(is.na(i)))
+
+```{r hot deck imputation}
+hdupmc <- hotdeck(cupmc)
+
+sum(is.na(fupmc_impuhd))
+
+```
+
+## Defining new clinical variables
+--pulse pressure
+--eGFR
+--IBW
+--Adjusted BW
+--fluid volumes / actual, adjusted, and ideal body weights
+--Did not break up SOFA into component scores
+
+saved as: 
+write.csv(hdupmc, "C:/Users/vadim/OneDrive/Desktop/UPMC/UPMC hd_imputed new_vars all_pts no_time.csv")
+
+```{r new variables}
+#pulse pressure
+hdupmc <- hdupmc |>
+  mutate(pulsepress = sbp - dbp)
+
+#eGFR
+calculate_egfr <- function(creat, age, gender) {
+  a <- ifelse(gender == "0", 101.9, 138.2)
+  b <- ifelse(gender == "0", 0.80, 1.05)
+  c <- ifelse(gender == "0", -0.742, -0.918)
+  
+  egfr <- a * ((creat / b) ^ c) * (0.993 ^ age)
+  
+  return(egfr)
+}
+
+hdupmc <- hdupmc |>
+  mutate(egfr = calculate_egfr(creat, age, gender))
+
+
+#fluid / actual weight
+hdupmc <- hdupmc |>
+  mutate(fluid_cckg = fluid_sum / weight)
+
+#fluid / adjusted weight
+hdupmc$adjbw <- hdupmc$ibw + 0.4 * (hdupmc$weight - hdupmc$ibw)
+
+hdupmc <- hdupmc |>
+  mutate(fluid_cckg_abw = fluid_sum / adjbw)
+
+#fluid / ideal weight
+hdupmc <- hdupmc |>
+         mutate(ibw = pmax(0.1, if_else(gender == 1,
+                               50 + 0.91 * (height - 152.4),
+                               45.5 + 0.91 * (height - 152.4))))
+
+hdupmc <- hdupmc |>
+  mutate(fluid_sum_cckgibw = fluid_sum / ibw)
+
+
+write.csv(hdupmc, "C:/Users/vadim/OneDrive/Desktop/UPMC/UPMC hd_imputed new_vars all_pts no_time.csv")
+
+```
+
+##Confirm no missingness
+```{r}
+sapply(hdupmc, function(i) sum(is.na(i)))
+```
+
+
+## Skim
+
+```{r skim the data, echo=FALSE}
+skim(hdupmc)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

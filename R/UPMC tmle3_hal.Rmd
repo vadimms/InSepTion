@@ -1,0 +1,196 @@
+---
+title: "UPMC tmle3"
+output: html_document
+date: "2024-01-05"
+---
+
+```{r setup, include=FALSE}
+library(haldensify)
+library(tmle3shift)
+library(data.table)
+library(dplyr)
+library(sl3) 
+library(tmle3)
+library(randomForest)
+library(xgboost)
+library(ranger)
+library(speedglm)
+library(Rsolnp)
+library(skimr)
+
+library(tidyverse)
+library(lubridate)
+library(slider) 
+library(SuperLearner)
+library(mgcv)
+library(tidyr)
+library(ggplot2)
+
+tmleupmc <- fread("C:/Users/vadim/OneDrive/Desktop/UPMC/UPMC_hd_imputed_clean.csv")
+
+```
+
+## Define the target variable
+
+
+```{r target outcome variable}
+
+#remove interval >12, time >3, etc
+tmleupmc <- hdupmc |>  filter(interval < 13)
+
+#vaariable for Y
+tmleupmc <- tmleupmc |>
+  group_by(hosp_id) |>
+  mutate(fluid_target = max(fluid_sum_cckgibw)) 
+
+```
+
+## Binarize the target fluid variable for tmle3
+
+```{r}
+
+tmleupmc$fluid_categ <- cut(tmleupmc$fluid_target, breaks = c(0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, Inf),
+                 right = FALSE,
+                 labels = c("0-5", "5-10", "10-15", "15-20", "20-25", "25-30", "30-35", 
+                            "35-40", "40-45", "45-50", "50-55", "55-60", "60+"))
+
+fluid_binarized <- model.matrix(~ fluid_cat - 1, tmleupmc)
+
+tmleupmc <- cbind(tmleupmc, fluid_binarized)
+
+head(tmleupmc)
+
+```
+
+
+## SL
+?add/remove learners
+I won't actually run hal for analysis right now
+
+
+```{r sl}
+sl_glm <- Lrnr_glm$new()
+sl_rf <- Lrnr_ranger$new()  
+sl_xgboost <- Lrnr_xgboost$new()
+sl_gam <- Lrnr_gam$new()
+sl_hal <- Lrnr_hal9001$new(max_degree = 3, n_folds = 3)
+
+sl_list <- list(sl_glm, sl_rf, sl_xgboost, sl_gam, sl_hal)
+
+stacked_sl3 <- Lrnr_sl$new(learners = sl_list)
+```
+
+
+## Specify the model
+
+other outcomes: icu_los, icu_ever, hosp_los, mv_d, vp_d, death_date, icu_ever_inwindow
+
+```{r model sl3}
+
+Y <- "dead"
+A <- "fluid_target"
+W <- c("age", "gender", "race", "weight", "hospital", "admit_year", "elix",
+       "sirs_total", "alb", "alt", "ast", "base_excess",        
+       "bicarb", "bili", "bun", "cl", "creat", "dbp", "fio2", 
+       "gcs", "gluc", "hr", "hgb", "inr", "lactate", "map", 
+       "mechvent", "paco2", "pao2", "pf_ratio", "ph", "plt", "k", 
+       "rr", "shock_index", "na", "o2_sat","sbp", "temp",                 
+       "wbc", "urine", "urine_sum", "norepi_equiv", "max_prev_norepi_equiv", "icu", "egfr", "pulsepress")
+
+sl3task <- make_sl3_Task(data = tmleupmc, covariates = W, outcome = Y)
+
+```
+
+# Set up and fit tmle for ATE
+
+```{r tmle}
+tmle_result <- tmle3(
+  task = sl3task,
+  learner_Y = stacked_sl3,
+  learner_A = stacked_sl3)
+  #intervention = 30
+  #var_estimate_method = "bootstrap",
+
+# Or
+
+tmle_result <- tmle3(
+  data = tmleupmc,                    
+  Y = "dead",
+  A = "fluid_target",
+  W = c("age", "gender", "race", "weight", "hospital", "admit_year", "elix",
+        "sirs_total", "alb", "alt", "ast", "base_excess",        
+        "bicarb", "bili", "bun", "cl", "creat", "dbp", "fio2", 
+        "gcs", "gluc", "hr", "hgb", "inr", "lactate", "map", 
+        "mechvent", "paco2", "pao2", "pf_ratio", "ph", "plt", "k", 
+        "rr", "shock_index", "na", "o2_sat","sbp", "temp",                 
+        "wbc", "urine", "urine_sum", "norepi_equiv", "max_prev_norepi_equiv", "icu", "egfr", "pulsepress"), 
+  learner_Y = stacked_sl3,       
+  learner_A = stacked_sl3)
+
+
+ate <- tmle_result$estimate
+
+```
+
+## Now for a stochastic tx regime with hal
+
+```{r}
+# learners used for conditional mean of the outcome
+mean_lrnr <- Lrnr_mean$new()
+fglm_lrnr <- Lrnr_glm_fast$new()
+rf_lrnr <- Lrnr_ranger$new()
+hal_lrnr <- Lrnr_hal9001$new(max_degree = 3, n_folds = 3)
+
+# SL for the outcome regression
+sl_reg_lrnr <- Lrnr_sl$new(
+  learners = list(mean_lrnr, fglm_lrnr, rf_lrnr, hal_lrnr),
+  metalearner = Lrnr_nnls$new()
+)
+
+# learners used for conditional densities for (g_n)
+haldensify_lrnr <- Lrnr_haldensify$new(
+  n_bins = c(5, 10, 20),
+  lambda_seq = exp(seq(-1, -10, length = 200))
+)
+# semiparametric density estimator with homoscedastic errors (HOSE)
+hose_hal_lrnr <- make_learner(Lrnr_density_semiparametric,
+                              mean_learner = hal_lrnr
+)
+# semiparametric density estimator with heteroscedastic errors (HESE)
+hese_rf_glm_lrnr <- make_learner(Lrnr_density_semiparametric,
+                                 mean_learner = rf_lrnr,
+                                 var_learner = fglm_lrnr
+)
+
+# SL for the conditional treatment density
+sl_dens_lrnr <- Lrnr_sl$new(
+  learners = list(hose_hal_lrnr, hese_rf_glm_lrnr),
+  metalearner = Lrnr_solnp_density$new()
+)
+
+learner_list <- list(Y = sl_reg_lrnr, A = sl_dens_lrnr)
+
+# initialize a tmle specification
+tmle_spec <- tmle_shift(
+  shift_val = 5,
+  shift_fxn = shift_additive,
+  shift_fxn_inv = shift_additive_inv
+)
+
+
+node_list <- list(
+  W = c("age", "gender", "race", "weight", "hospital", "admit_year", "elix",
+        "sirs_total", "alb", "alt", "ast", "base_excess",        
+        "bicarb", "bili", "bun", "cl", "creat", "dbp", "fio2", 
+        "gcs", "gluc", "hr", "hgb", "inr", "lactate", "map", 
+        "mechvent", "paco2", "pao2", "pf_ratio", "ph", "plt", "k", 
+        "rr", "shock_index", "na", "o2_sat","sbp", "temp",                 
+        "wbc", "urine", "urine_sum", "norepi_equiv", "max_prev_norepi_equiv", "icu", "egfr", "pulsepress"),
+  A = "fluid_12h_cckgibw",  
+  Y = "dead"  )
+
+ 
+tmle_fit <- tmle3(tmle_spec, tmleupmc, node_list, learner_list)
+
+```
+
