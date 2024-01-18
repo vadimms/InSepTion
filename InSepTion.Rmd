@@ -10,63 +10,50 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 
 # packages
-library(tmle)
 library(tidyverse)
 library(lubridate)
-library(slider) 
-library(SuperLearner)
-library(mgcv)
+library(data.table)
+library(mice)
+library(dplyr)
 library(tidyr)
 library(ggplot2)
 
 library(haldensify)
 library(tmle3shift)
-library(data.table)
-library(dplyr)
-library(sl3) 
+library(sl3)
 library(tmle3)
+library(VIM)
+library(Rsolnp)
+library(SuperLearner)
+
+library(slider)
+library(mgcv)
 library(randomForest)
 library(xgboost)
 library(ranger)
 library(speedglm)
-library(Rsolnp)
-
-library(data.table)
-library(mice)
-# library(tmle)
-# library(SuperLearner)
-# library(randomForest)
-# library(xgboost)
-# library(mgcv)
-library(dplyr)
-# library(tidyr)
-# library(ggplot2)
-library(arm)   
-# library(DMwR) #can't download
-library(VIM)
+library(arm)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
-```
-
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## data
 
 ```{r load data}
+data_filepath <- "data/UPMC tmle subset.csv"
+upmc <- read.csv(data_filepath)
+```
+
+```{r}
 
 ```
+
+
+```{r}
+source("R/UPMC InSepTion R code v2.R")
+```
+
+```{r run tmle.R }
+source("R/UPMC tmle3.R")
+```
+
+
 
