@@ -85,7 +85,8 @@ W <- c("age", "gender", "race", "weight", "hospital", "admit_year", "elix",
        "gcs", "gluc", "hr", "hgb", "inr", "lactate", "map", 
        "mechvent", "paco2", "pao2", "pf_ratio", "ph", "plt", "k", 
        "rr", "shock_index", "na", "o2_sat","sbp", "temp",                 
-       "wbc", "urine", "urine_sum", "norepi_equiv", "max_prev_norepi_equiv", "icu", "egfr", "pulsepress")
+       "wbc", "urine", "urine_sum", "norepi_equiv", "max_prev_norepi_equiv", 
+       "icu", "egfr", "pulsepress")
 
 sl3task <- make_sl3_Task(data = tmleupmc, covariates = W, outcome = Y)
 
