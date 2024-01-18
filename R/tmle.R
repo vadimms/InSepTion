@@ -57,3 +57,15 @@ tmle_spec <- tmle_shift(
   shift_fxn_inv = shift_additive_inv
 )
 tmle_fit <- tmle3(tmle_spec, upmc, node_list, learner_list)
+
+
+# initialize a tmle specification for the variable importance parameter
+# what's the grid of shifts we wish to consider?
+delta_grid <- seq(-10, 10, 1)
+
+# initialize a tmle specification
+tmle_spec <- tmle_vimshift_delta(
+  shift_grid = delta_grid,
+  max_shifted_ratio = 2
+)
+tmle_fit <- tmle3(tmle_spec, upmc, node_list, learner_list)
