@@ -8,7 +8,6 @@
  * timing smaller prototype analyses
  * figure out parallelization
  * subgroups - separate scripts
- * 
 
 # To Do
  * Familiarize with Github / Gitkraken

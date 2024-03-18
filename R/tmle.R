@@ -4,12 +4,18 @@ library(sl3)
 library(tmle3)
 library(tmle3shift)
 
+data_path <- "./data/UPMC_hd_fluidbins_targets.csv"
+data <- read.csv(data_path)
+
+if (data_path == "./data/UPMC_hd_fluidbins_targets.csv") {
+  data <- dplyr::filter(data, interval == 7)
+}
 
 # learners used for conditional mean of the outcome
 mean_lrnr <- Lrnr_mean$new()
 fglm_lrnr <- Lrnr_glm_fast$new()
 rf_lrnr <- Lrnr_ranger$new()
-hal_lrnr <- Lrnr_hal9001$new(max_degree = 3, n_folds = 3)
+hal_lrnr <- Lrnr_hal9001$new(max_degree = 2, n_folds = 3)
 
 # SL for the outcome regression
 sl_reg_lrnr <- Lrnr_sl$new(
@@ -47,25 +53,41 @@ learner_list <- list(Y = sl_reg_lrnr, A = sl_dens_lrnr)
 # initialize a tmle specification
 node_list <- list(
   W = c("age", "gender", "race", "weight", "hospital", "admit_year", "elix",
-         "sirs_total", "alb", "alt", "ast", "base_excess",        
-         "bicarb", "bili", "bun", "cl", "creat", "dbp", "fio2", 
-         "gcs", "gluc", "hr", "hgb", "inr", "lactate", "map", 
-         "mechvent", "paco2", "pao2", "pf_ratio", "ph", "plt", "k", 
-         "rr", "shock_index", "na", "o2_sat","sbp", "temp", "adjbw",             
-         "wbc", "urine", "urine_sum", "norepi_equiv", "max_prev_norepi_equiv", 
-         "icu", "egfr", "pulsepress", "surg", "ibw", "hosp_id", "height", "id", 
-         "empi_id", "icu_ever_inwindow", "dtt0_hours", "interval"),
-  A = "fluid_12h_cckgibw",
+        "sirs_total", "alb", "alt", "ast", "base_excess",
+        "bicarb", "bili", "bun", "cl", "creat", "dbp", "fio2",
+        "gcs", "gluc", "hr", "hgb", "inr", "lactate", "map",
+        "mechvent", "paco2", "pao2", "pf_ratio", "ph", "plt", "k",
+        "rr", "shock_index", "na", "o2_sat","sbp", "temp", "adjbw",
+        "wbc", "urine", "urine_sum", "norepi_equiv", "max_prev_norepi_equiv",
+        "icu", "egfr", "pulsepress", "surg", "ibw", "height", "id",
+        "icu_ever_inwindow", "dtt0_hours"),
+  A = "fluid_target",
   Y = "dead"
 )
 
+
+  tmp <- model.matrix(~ . -1, 
+                      data[, .SD, .SDcols = c("age", "gender", "race", "weight", "hospital", "admit_year", "elix",
+                                              "sirs_total", "alb", "alt", "ast", "base_excess",
+                                              "bicarb", "bili", "bun", "cl", "creat", "dbp", "fio2",
+                                              "gcs", "gluc", "hr", "hgb", "inr", "lactate", "map",
+                                              "mechvent", "paco2", "pao2", "pf_ratio", "ph", "plt", "k",
+                                              "rr", "shock_index", "na", "o2_sat","sbp", "temp", "adjbw",
+                                              "wbc", "urine", "urine_sum", "norepi_equiv", "max_prev_norepi_equiv",
+                                              "icu", "egfr", "pulsepress", "surg", "ibw", "height", "id", 
+                                              "icu_ever_inwindow", "dtt0_hours")])
+
+
 tmle_spec <- tmle_shift(
-  shift_val = 1,
+  shift_val = 5,
   shift_fxn = shift_additive,
   shift_fxn_inv = shift_additive_inv
 )
+
+data_subset <- data[1:1000, ]
+
 start_time <- proc.time()
-tmle_fit <- tmle3(tmle_spec, upmc, node_list, learner_list)
+tmle_fit <- tmle3(tmle_spec, data, node_list, learner_list)
 fit_time <- proc.time() - start_time
 
 # # initialize a tmle specification for the variable importance parameter
@@ -89,7 +111,7 @@ plan(multisession, workers = ncores)
 
 set.seed(0)
 start_time <- proc.time()
-tmle_parallel <- tmle3(tmle_spec, upmc, node_list, learner_list)
+tmle_parallel <- tmle3(tmle_spec, data, node_list, learner_list)
 fit_time_parallel <- proc.time() - start_time
 
 fit_time/fit_time_parallel
